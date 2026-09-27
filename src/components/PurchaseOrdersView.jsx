@@ -14,6 +14,7 @@ import { formatCurrency } from '../utils';
 import { toast } from './Toast';
 import ActionMenu from './ActionMenu';
 import { getHsnMaster, getUnitMaster } from '../utils/masterData';
+import { getPrintSettings } from '../utils/printSettings';
 function downloadRowsCsv(filename, rows, cols) {
   const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const headers = cols.map(c => c.label);
@@ -69,9 +70,10 @@ async function sha256Hex(text) {
 }
 
 function printPO(po, profile, fingerprint) {
+  const printSettings = getPrintSettings();
   const t = calcPOTotals(po.items, po.taxRate, po.vendorState, profile?.state);
   const terms = (po.terms || po.notes || profile?.defaultTerms ||
-    '1. Please quote PO number on all invoices and delivery challans.\\n2. Goods/services subject to inspection and approval.\\n3. Payment as per agreed terms.').replace(/\\n/g, '<br/>');
+    '1. Please quote PO number on all invoices and delivery challans.\n2. Goods/services subject to inspection and approval.\n3. Payment as per agreed terms.').replace(/\n/g, '<br/>');
   const rows = (po.items || []).map((it, i) => {
     const amt = calcItemAmount(it);
     return `<tr>
@@ -100,6 +102,15 @@ function printPO(po, profile, fingerprint) {
         <td style="border:1px solid #000;padding:5px;text-align:right"><b>SGST</b></td>
         <td style="border:1px solid #000;padding:5px;text-align:right">${t.sgst.toFixed(2)}</td>
       </tr>`;
+
+  const signatureMarkup = printSettings.signatureShow ? `
+    <td class="cell sign" style="width:40%;text-align:center;vertical-align:bottom">
+      <div>For <b>${profile?.businessName || 'Company'}</b></div>
+      ${printSettings.signatureImage ? `<div style="margin:10px auto"><img src="${printSettings.signatureImage}" alt="signature" style="max-height:40px;max-width:120px;display:block;margin:0 auto" /></div>` : '<div style="height:50px"></div>'}
+      <div style="border-top:1px solid #000;margin-top:8px;padding-top:4px">${printSettings.signatureName || 'Authorised Signatory'}</div>
+    </td>
+  ` : '';
+
   const html = `<!DOCTYPE html><html><head><title>${po.poNumber || 'PO'}</title>
 <meta charset="utf-8"/>
 <style>
@@ -182,11 +193,7 @@ function printPO(po, profile, fingerprint) {
       <b>Terms &amp; Conditions</b>
       <div class="muted" style="margin-top:6px;line-height:1.45">${terms}</div>
     </td>
-    <td class="cell sign" style="width:40%;text-align:center;vertical-align:bottom">
-      <div>For <b>${profile?.businessName || 'Company'}</b></div>
-      <div style="height:48px"></div>
-      <div style="border-top:1px solid #000;margin-top:8px;padding-top:4px">Authorised Signatory</div>
-    </td>
+    ${signatureMarkup || '<td class="cell" style="width:40%;height:90px"></td>'}
   </tr>
 </table>
 <div class="muted" style="margin-top:8px;font-size:9px">
@@ -194,12 +201,12 @@ function printPO(po, profile, fingerprint) {
 </div>
 </body></html>`;
 
-  // ✅ Use Blob URL instead of document.write()
+  // ✅ Use a blob URL to avoid blank print page / document.write() issues
   try {
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     let cleaned = false;
-    
+
     const cleanup = () => {
       if (!cleaned) {
         cleaned = true;
@@ -207,15 +214,14 @@ function printPO(po, profile, fingerprint) {
       }
     };
 
-    const w = window.open(url, '_blank');
-    
+    const w = window.open(url, '_blank', 'noopener,noreferrer');
+
     if (!w) {
       cleanup();
       alert('Pop-up blocked. Please allow pop-ups to print Purchase Orders.');
       return;
     }
 
-    // Wait for page to load completely, then print
     w.onload = () => {
       try {
         w.focus();
@@ -223,13 +229,10 @@ function printPO(po, profile, fingerprint) {
       } catch (e) {
         console.error('Print failed', e);
       }
-      // Cleanup after print dialog closes (60 seconds max)
       setTimeout(cleanup, 60_000);
     };
 
-    // Fallback cleanup if onload never fires
     setTimeout(cleanup, 90_000);
-
   } catch (e) {
     console.error('printPO failed', e);
     alert('Failed to generate PO print. Check browser console.');
