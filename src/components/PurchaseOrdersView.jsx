@@ -71,132 +71,119 @@ async function sha256Hex(text) {
 function printPO(po, profile, fingerprint) {
   const t = calcPOTotals(po.items, po.taxRate, po.vendorState, profile?.state);
   const terms = (po.terms || po.notes || profile?.defaultTerms ||
-    '1. Please quote PO number on all invoices and delivery challans.\\n2. Goods/services subject to inspection and approval.\\n3. Payment as per agreed terms.').replace(/\\n/g, '<br/>');
+    '1. Please quote PO number on all invoices and delivery challans.\n2. Goods/services subject to inspection and approval.\n3. Payment as per agreed terms.').replace(/\n/g, '<br/>');
+  const notes = (po.notes || '').replace(/</g, '&lt;').replace(/\n/g, '<br/>');
+  const sigSrc = profile?.signature || profile?.signatureImage || '';
   const rows = (po.items || []).map((it, i) => {
     const amt = calcItemAmount(it);
     return `<tr>
-      <td style="border:1px solid #000;padding:5px;text-align:center">${i + 1}</td>
-      <td style="border:1px solid #000;padding:5px">${(it.description || '').replace(/</g,'&lt;')}</td>
-      <td style="border:1px solid #000;padding:5px;text-align:center">${it.hsn || ''}</td>
-      <td style="border:1px solid #000;padding:5px;text-align:center">${it.qty || 0}</td>
-      <td style="border:1px solid #000;padding:5px;text-align:center">${it.unit || ''}</td>
-      <td style="border:1px solid #000;padding:5px;text-align:right">${Number(it.rate || 0).toFixed(2)}</td>
-      <td style="border:1px solid #000;padding:5px;text-align:right">${amt.toFixed(2)}</td>
+      <td class="cell c">${i + 1}</td>
+      <td class="cell">${(it.description || '').replace(/</g,'&lt;')}</td>
+      <td class="cell c">${it.hsn || ''}</td>
+      <td class="cell c">${it.unit || ''}</td>
+      <td class="cell c">${it.qty || 0}</td>
+      <td class="cell r">${Number(it.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="cell r">${amt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
     </tr>`;
   }).join('');
-  const taxBlock = t.isInterstate
-    ? `<tr>
-        <td colspan="5" style="border:1px solid #000;padding:5px"></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right"><b>IGST @ ${po.taxRate || 0}%</b></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right">${t.igst.toFixed(2)}</td>
-      </tr>`
-    : `<tr>
-        <td colspan="5" style="border:1px solid #000;padding:5px"></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right"><b>CGST</b></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right">${t.cgst.toFixed(2)}</td>
-      </tr>
-      <tr>
-        <td colspan="5" style="border:1px solid #000;padding:5px"></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right"><b>SGST</b></td>
-        <td style="border:1px solid #000;padding:5px;text-align:right">${t.sgst.toFixed(2)}</td>
-      </tr>`;
-  const html = `<!DOCTYPE html><html><head><title>${po.poNumber || 'PO'}</title>
-<meta charset="utf-8"/>
+  const taxRows = t.isInterstate
+    ? `<div class="tot-row"><span>IGST (${Number(po.taxRate || 0).toFixed(2)}%):</span><span>₹${t.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`
+    : `<div class="tot-row"><span>CGST:</span><span>₹${t.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+       <div class="tot-row"><span>SGST:</span><span>₹${t.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`;
+  const shipName = po.shipToName || po.deliverySite || po.site || '';
+  const shipAddr = po.shipToAddress || po.deliveryAddress || '';
+  const shipState = po.shipToState || po.deliveryState || '';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${po.poNumber || 'PO'}</title>
 <style>
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #000; margin: 0; }
-  table { border-collapse: collapse; width: 100%; }
-  .box { border: 1px solid #000; }
-  .hdr { font-size: 16px; font-weight: bold; text-align: center; padding: 8px; border: 1px solid #000; }
-  .cell { border: 1px solid #000; padding: 6px; vertical-align: top; }
-  .muted { color: #333; font-size: 10px; }
-  .sign { height: 70px; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; margin: 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+  .co-name { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
+  .co-meta { font-size: 10px; line-height: 1.45; color: #333; margin-top: 4px; }
+  .po-title { font-size: 16px; font-weight: 800; text-align: right; }
+  .po-meta { font-size: 11px; text-align: right; margin-top: 4px; line-height: 1.5; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #111; margin-bottom: 10px; }
+  .two > div { padding: 8px 10px; }
+  .two > div:first-child { border-right: 1px solid #111; }
+  .sec-h { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #444; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-bottom: 6px; }
+  .subj { border: 1px solid #111; padding: 8px 10px; margin-bottom: 10px; }
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  table.items th, table.items td { border: 1px solid #111; padding: 5px 6px; vertical-align: top; }
+  table.items th { background: #f3f4f6; font-size: 10px; }
+  .cell.c { text-align: center; } .cell.r { text-align: right; }
+  .bottom { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-top: 8px; }
+  .notes { font-size: 10px; line-height: 1.45; }
+  .totals { text-align: right; font-size: 12px; }
+  .tot-row { display: flex; justify-content: flex-end; gap: 24px; margin: 3px 0; }
+  .tot-row.grand { font-size: 14px; font-weight: 800; margin-top: 6px; padding-top: 6px; border-top: 1px solid #111; }
+  .sig { margin-top: 28px; text-align: right; }
+  .sig img { max-height: 48px; max-width: 140px; display: block; margin: 0 0 4px auto; }
+  .sig-line { border-top: 1px solid #111; display: inline-block; min-width: 160px; padding-top: 4px; font-size: 10px; text-align: center; }
+  .fp { margin-top: 18px; font-size: 8px; color: #666; border-top: 1px dashed #999; padding-top: 6px; text-align: center; }
 </style></head><body>
-<table class="box" style="width:100%">
-  <tr>
-    <td class="cell" style="width:55%">
-      <div style="font-size:14px;font-weight:bold">${profile?.businessName || 'Business'}</div>
-      <div class="muted">${[profile?.address, profile?.city, profile?.state, profile?.pin].filter(Boolean).join(', ')}</div>
-      <div class="muted">GSTIN: ${profile?.gstin || '—'} · PAN: ${profile?.pan || '—'}</div>
-      <div class="muted">Phone: ${profile?.phone || '—'} · Email: ${profile?.email || '—'}</div>
-    </td>
-    <td class="cell" style="width:45%">
-      <div class="hdr" style="border:none;padding:4px 0">PURCHASE ORDER</div>
-      <table style="width:100%;font-size:11px">
-        <tr><td><b>PO No</b></td><td>${po.poNumber || ''}</td></tr>
-        <tr><td><b>Date</b></td><td>${po.date || ''}</td></tr>
-        <tr><td><b>Status</b></td><td>${po.status || 'Issued'}</td></tr>
-        <tr><td><b>Cost Center</b></td><td>${po.costCenterId || po.costCenter || '—'}</td></tr>
-      </table>
-    </td>
-  </tr>
-  <tr>
-    <td class="cell">
-      <b>Vendor (Bill From)</b><br/>
-      ${po.vendorName || ''}<br/>
-      <span class="muted">GSTIN: ${po.vendorGstin || '—'} · State: ${po.vendorState || '—'}</span>
-    </td>
-    <td class="cell">
-      <b>Ship To (Site)</b><br/>
-      ${po.site || po.shipToSite || 'Main Site'}<br/>
-      <span class="muted">${profile?.businessName || ''}</span>
-    </td>
-  </tr>
-</table>
-<table style="width:100%;margin-top:0">
-  <thead>
-    <tr style="background:#f3f4f6">
-      <th class="cell" style="width:4%">#</th>
-      <th class="cell">Description</th>
-      <th class="cell" style="width:10%">HSN</th>
-      <th class="cell" style="width:8%">Qty</th>
-      <th class="cell" style="width:8%">Unit</th>
-      <th class="cell" style="width:12%">Rate</th>
-      <th class="cell" style="width:12%">Amount</th>
-    </tr>
-  </thead>
-  <tbody>
-    ${rows || '<tr><td class="cell" colspan="7" style="text-align:center">No items</td></tr>'}
-    <tr>
-      <td colspan="5" class="cell"></td>
-      <td class="cell" style="text-align:right"><b>Taxable</b></td>
-      <td class="cell" style="text-align:right">${t.sub.toFixed(2)}</td>
-    </tr>
-    ${taxBlock}
-    <tr>
-      <td colspan="5" class="cell"></td>
-      <td class="cell" style="text-align:right"><b>Round Off</b></td>
-      <td class="cell" style="text-align:right">0.00</td>
-    </tr>
-    <tr>
-      <td colspan="5" class="cell"></td>
-      <td class="cell" style="text-align:right"><b>Grand Total</b></td>
-      <td class="cell" style="text-align:right"><b>${t.total.toFixed(2)}</b></td>
-    </tr>
-  </tbody>
-</table>
-<table style="width:100%;margin-top:0">
-  <tr>
-    <td class="cell" style="width:60%;height:90px">
-      <b>Terms &amp; Conditions</b>
-      <div class="muted" style="margin-top:6px;line-height:1.45">${terms}</div>
-    </td>
-    <td class="cell sign" style="width:40%;text-align:center;vertical-align:bottom">
-      <div>For <b>${profile?.businessName || 'Company'}</b></div>
-      <div style="height:48px"></div>
-      <div style="border-top:1px solid #000;margin-top:8px;padding-top:4px">Authorised Signatory</div>
-    </td>
-  </tr>
-</table>
-<div class="muted" style="margin-top:8px;font-size:9px">
-  SHA-256: ${fingerprint || '—'} · Computer generated PO — ${new Date().toLocaleString('en-IN')}
-</div>
-<script>window.onload=function(){window.print()}</script>
+  <div class="top">
+    <div>
+      <div class="co-name">${(profile?.businessName || 'Company').replace(/</g,'&lt;')}</div>
+      <div class="co-meta">
+        ${[profile?.address, profile?.city, profile?.state, profile?.pin].filter(Boolean).join(', ')}<br/>
+        ${profile?.gstin ? 'GSTIN: ' + profile.gstin + '<br/>' : ''}
+        ${profile?.phone || profile?.mobile ? 'Mobile: ' + (profile.phone || profile.mobile) : ''}
+      </div>
+    </div>
+    <div>
+      <div class="po-title">PURCHASE ORDER</div>
+      <div class="po-meta">
+        <b>PO No:</b> ${(po.poNumber || '').replace(/</g,'&lt;')}<br/>
+        <b>Date:</b> ${po.date || ''}<br/>
+        <b>Status:</b> ${po.status || 'Issued'}
+      </div>
+    </div>
+  </div>
+  <div class="two">
+    <div>
+      <div class="sec-h">Supplier Details (To)</div>
+      <b>${(po.vendorName || '').replace(/</g,'&lt;')}</b><br/>
+      ${po.vendorGstin ? 'GSTIN: ' + po.vendorGstin + '<br/>' : ''}
+      ${po.vendorPhone ? 'Phone: ' + po.vendorPhone + '<br/>' : ''}
+      ${po.vendorAddress ? ('Address: ' + String(po.vendorAddress).replace(/</g,'&lt;')) : ''}
+    </div>
+    <div>
+      <div class="sec-h">Delivery Details (Ship To)</div>
+      ${shipName ? '<b>' + String(shipName).replace(/</g,'&lt;') + '</b><br/>' : ''}
+      ${shipAddr ? String(shipAddr).replace(/</g,'&lt;') + '<br/>' : ''}
+      ${shipState ? 'State: ' + String(shipState).replace(/</g,'&lt;') : ''}
+    </div>
+  </div>
+  ${po.subject || po.title ? `<div class="subj"><b>Subject:</b> ${String(po.subject || po.title).replace(/</g,'&lt;')}</div>` : ''}
+  <table class="items">
+    <thead><tr>
+      <th style="width:28px">Sl</th><th>Description / Material</th><th>HSN/SAC</th><th>Unit</th><th>Qty</th><th>Unit Rate</th><th>Amount (₹)</th>
+    </tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" class="cell c">No items</td></tr>'}</tbody>
+  </table>
+  <div class="bottom">
+    <div class="notes">
+      ${notes ? '<b>Notes / Instructions:</b><br/>' + notes + '<br/><br/>' : ''}
+      <b>Terms &amp; Conditions:</b><br/>${terms}
+    </div>
+    <div class="totals">
+      <div class="tot-row"><span>Subtotal:</span><span>₹${t.sub.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      ${taxRows}
+      <div class="tot-row grand"><span>Grand Total:</span><span>₹${t.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      <div class="sig">
+        ${sigSrc ? '<img src="' + sigSrc + '" alt="Signature"/>' : ''}
+        <div class="sig-line">Authorized Signature<br/><span style="font-size:8px;color:#555">${(profile?.businessName || '').replace(/</g,'&lt;')}</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="fp">Generated by SD Dynamics${fingerprint ? ' · SHA-256: ' + fingerprint : ''}</div>
+  <script>window.onload=function(){window.print();}</script>
 </body></html>`;
-  const w = window.open('', '_blank', 'width=900,height=1000');
+  const w = window.open('', '_blank', 'noopener,noreferrer');
   if (w) { w.document.write(html); w.document.close(); }
 }
+
 
 
 export default function PurchaseOrdersView() {

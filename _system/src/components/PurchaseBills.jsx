@@ -31,6 +31,8 @@ const BillOCR = lazy(() => import('./BillOCR'));
 
 const PAYMENT_STATUSES = ['Unpaid', 'Paid', 'Partial'];
 
+
+
 // cessPercent added in v1.6.8 (P1 #16) — suppliers of tobacco / aerated
 // drinks / motor vehicles / coal charge GST + Cess. Without a slot for it,
 // we couldn't reclaim ITC on the cess in GSTR-3B Table 4(A).
@@ -94,6 +96,29 @@ export default function PurchaseBills() {
   const [purchaseWOs, setPurchaseWOs] = useState([]);
   const [purchaseCCs, setPurchaseCCs] = useState([]);
   const [form, setForm] = useState({ ...emptyForm, items: [{ ...emptyItem }] });
+
+  // Prefill from PO ("Create Bill from PO")
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('sd_purchase_from_po');
+      if (!raw) return;
+      sessionStorage.removeItem('sd_purchase_from_po');
+      const payload = JSON.parse(raw);
+      setForm(f => ({
+        ...f,
+        supplierName: payload.supplierName || f.supplierName || '',
+        supplierGstin: payload.supplierGstin || f.supplierGstin || '',
+        items: (payload.items && payload.items.length) ? payload.items : f.items,
+        linkedPO: payload.fromPO || '',
+        workOrderId: payload.workOrderId || '',
+        costCenterId: payload.costCenterId || '',
+        site: payload.site || '',
+      }));
+      setShowForm(true);
+      toast('Pre-filled from PO ' + (payload.fromPO || ''), 'info');
+    } catch { /* ignore */ }
+  }, []);
+
   // v1.10.22 — OCR modal state.
   const [showOCR, setShowOCR] = useState(false);
   // v1.10.30 — reported: "add a view only option modal type so can user

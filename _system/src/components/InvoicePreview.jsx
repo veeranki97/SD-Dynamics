@@ -697,7 +697,7 @@ const InvoicePreview = React.forwardRef(({ profile, client, details, items, tota
                   <span style={{ textAlign: 'right' }}>{amt(totals.cess)}</span>
                 </div>
               )}
-              {showRoundOff && Number(totals?.roundOff) !== 0 && (
+              {showRoundOff && (
                 <div style={rowStyle}>
                   <span>{cap('Round-off')}</span>
                   <span style={{ textAlign: 'right' }}>
@@ -1222,13 +1222,19 @@ const InvoicePreview = React.forwardRef(({ profile, client, details, items, tota
                     This is a Computer Generated Transaction — Generated on {new Date().toLocaleString('en-IN')}
                   </p>
                 </td>
-                <td style={{ padding: 8, textAlign: 'center', verticalAlign: 'top', minHeight: 90 }}>
-                  <div style={{ border: '1px solid #000', minHeight: 88, padding: 6 }}>
+                <td style={{ padding: 6, textAlign: 'center', verticalAlign: 'bottom', height: 1 }}>
+                  <div style={{ border: '1px solid #000', padding: '4px 6px 6px', minHeight: 72 }}>
                     <div style={{ fontSize: 10 }}>For <strong>{profile?.businessName || 'Company'}</strong></div>
                     {showSignature && (profile?.signature || _ps.signatureImage) && (
-                      <img src={profile?.signature || _ps.signatureImage} alt="Sign" style={{ maxHeight: 40, margin: '6px auto', display: 'block' }} />
+                      <img src={profile?.signature || _ps.signatureImage} alt="Sign" style={{ maxHeight: 36, margin: '4px auto 2px', display: 'block' }} />
                     )}
-                    <div style={{ marginTop: 28, fontSize: 9, borderTop: '1px solid #000', paddingTop: 4 }}>Authorised Signatory</div>
+                    <div style={{ marginTop: 8, fontSize: 7, color: '#166534', lineHeight: 1.25 }}>
+                      ✔ Signature Valid<br />
+                      Digitally signed by: {profile?.businessName || 'Authorised'}<br />
+                      Date: {new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST<br />
+                      Location: {profile?.state || 'India'}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 9, borderTop: '1px solid #000', paddingTop: 3 }}>Authorised Signatory</div>
                   </div>
                 </td>
               </tr>

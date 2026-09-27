@@ -148,6 +148,24 @@ function ReceiptModal({ target, onClose }) {
   );
 }
 
+
+function exportInvoicesCsv(bills) {
+  const cols = ['invoiceNumber','invoiceDate','clientName','status','totalAmount','paidAmount','totalTaxAmount','workOrderId','currency'];
+  const lines = [cols.join(',')].concat((bills || []).map(b => cols.map(c => {
+    let v = b[c];
+    if (c === 'invoiceDate') v = b.data?.details?.invoiceDate || b.invoiceDate || '';
+    if (c === 'clientName') v = b.clientName || b.data?.client?.name || '';
+    if (c === 'workOrderId') v = b.workOrderId || b.data?.workOrderId || '';
+    if (c === 'status') v = b.status || 'unpaid';
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }).join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  a.download = 'invoices-export.csv';
+  a.click();
+}
+
 export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpenProducts, activeProfile, listMode = false }) {
   // v1.10.64 — requested (#55, @sangwanmail-eng): "An invoice belonging to one
   // company should not appear under the other."
@@ -196,12 +214,13 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
     for (const b of bills) {
       if ((b.invoiceType || '').toLowerCase().includes('proforma') || (b.invoiceType || '').toLowerCase().includes('quotation')) continue;
       const cur = b.currency || b.data?.invoiceOptions?.currency || 'INR';
-      if (!byCurrency[cur]) byCurrency[cur] = { total: 0, tax: 0, unpaid: 0 };
+      if (!byCurrency[cur]) byCurrency[cur] = { total: 0, tax: 0, unpaid: 0, received: 0 };
       byCurrency[cur].total += b.totalAmount || 0;
       byCurrency[cur].tax += b.totalTaxAmount || 0;
       const due = (b.totalAmount || 0) - (b.paidAmount || 0);
       if (b.status !== 'paid' && due > 0.01) {
         byCurrency[cur].unpaid += due;
+        byCurrency[cur].received = (byCurrency[cur].received || 0) + (Number(b.paidAmount) || 0);
         const dueDate = b.data?.details?.dueDate || b.dueDate || b.data?.details?.invoiceDate;
         if (dueDate) {
           const dd = new Date(dueDate);
@@ -245,7 +264,7 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
     } catch { /* ignore */ }
     return {
       date: true, invoice: true, type: true, client: true, amount: true,
-      status: true, actions: true, printed: false, currency: false, dueDate: false,
+      status: true, actions: true, printed: false, currency: false, dueDate: false, workOrder: false,
     };
   });
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -523,54 +542,105 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
       } else {
         await saveBill(updated, { overwrite: true });
       }
+    
+    
     } else if (newStatus === 'unpaid' || newStatus === 'pending') {
       const proceed = await confirmAction({
         title: 'Mark unpaid and reverse payments?',
-        message: 'Reverses ledger and cash-book entries for receipts on this invoice.',
+        message: 'Clears paid amount to ₹0, posts reversing journals, and updates cash book. Works for both Partial and Paid.',
         confirmLabel: 'Reverse & mark unpaid',
         tone: 'warning',
       }).catch(() => false);
       if (!proceed) return;
+
+      const priorPayments = Array.isArray(bill.payments) ? [...bill.payments] : [];
+      const priorPaid = Number(bill.paidAmount) || priorPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
       updated.paidAmount = 0;
       updated.payments = [];
       updated.status = 'unpaid';
-      // Clear nested data.payments if present (UI sometimes reads both)
       if (updated.data && typeof updated.data === 'object') {
         updated.data = { ...updated.data, payments: [], paidAmount: 0 };
       }
-      await saveBill(updated, { overwrite: true });
+      try {
+        await saveBill(updated, { overwrite: true });
+      } catch (e) {
+        toast('Could not update invoice status', 'error');
+        return;
+      }
+
+      let reversed = 0;
       try {
         const journals = await getAllJournals().catch(() => []);
         const inv = String(bill.invoiceNumber || '');
         const bid = String(bill.id || '');
         const related = (journals || []).filter(j => {
-          if (j.refType === 'payment-reversal') return false;
+          if (!j || j.refType === 'payment-reversal') return false;
+          if (j.refType !== 'payment' && j.refType !== 'advance') return false;
+          if ((journals || []).some(x => x && x.reversesId === j.id)) return false;
           const id = String(j.id || '');
-          const match =
-            j.refType === 'payment' && (
-              String(j.refId || '') === bid || String(j.refId || '') === inv
-              || String(j.againstInvoice || '') === inv
-              || String(j.invoiceNumber || '') === inv
-              || id.includes(bid) || (inv && id.includes(inv.replace(/[^a-zA-Z0-9]/g, '_')))
-            );
-          return match;
+          return (
+            String(j.refId || '') === bid || String(j.refId || '') === inv
+            || String(j.againstInvoice || '') === inv
+            || String(j.invoiceNumber || '') === inv
+            || (bid && id.includes(bid))
+          );
         });
-        let reversed = 0;
+
         for (const j of related) {
-          if ((journals || []).some(x => x.reversesId === j.id)) continue;
-          const rev = journalReversePayment(j, `Unpaid — reverse ${bill.invoiceNumber || bill.id}`);
-          if (rev) {
-            await saveJournal(rev);
-            reversed++;
+          try {
+            const rev = journalReversePayment(j, `Unpaid — reverse ${inv || bid}`);
+            if (rev && rev.entries && rev.entries.length) {
+              await saveJournal(rev);
+              reversed++;
+            }
+          } catch (e) { console.warn('reverse one journal', e); }
+        }
+
+        // No matching journals: post direct reversing entries from payment amounts
+        if (reversed === 0 && (priorPayments.length > 0 || priorPaid > 0.01)) {
+          const toReverse = priorPayments.length
+            ? priorPayments
+            : [{ amount: priorPaid, mode: 'bank-transfer', date: new Date().toISOString().split('T')[0], id: 'manual' }];
+          for (const p of toReverse) {
+            const amt = Number(p.amount) || 0;
+            if (amt < 0.01) continue;
+            const isCash = String(p.mode || '').toLowerCase().includes('cash');
+            const party = bill.clientName || bill.data?.client?.name || '';
+            const rev = {
+              id: 'jnl_rev_direct_' + (p.id || Date.now()) + '_' + Math.random().toString(36).slice(2, 6),
+              date: p.date || new Date().toISOString().split('T')[0],
+              narration: `Unpaid reverse ₹${amt.toFixed(2)} — ${inv || bid}`,
+              refType: 'payment-reversal',
+              refId: bid || inv,
+              againstInvoice: inv,
+              party,
+              clientName: party,
+              entries: [
+                { account: isCash ? 'Cash' : 'Bank', debit: 0, credit: amt, party },
+                { account: 'Sundry Debtors', debit: amt, credit: 0, party },
+              ],
+            };
+            try {
+              await saveJournal(rev);
+              reversed++;
+            } catch (e) { console.warn('direct reverse failed', e); }
           }
         }
-        if (reversed > 0) toast(`Reversed ${reversed} ledger receipt(s)`, 'success');
-        else if (related.length === 0) toast('Marked unpaid (no matching payment journal found to reverse)', 'info');
+
+        if (reversed > 0) {
+          toast(`Marked unpaid (₹0). Reversed ${reversed} journal(s).`, 'success');
+        } else {
+          toast('Marked unpaid (₹0). No prior payment journals found to reverse.', 'info');
+        }
       } catch (e) {
         console.warn('[ledger] unpaid reversal failed', e);
-        toast('Marked unpaid but ledger reverse failed — check Journals', 'warning');
+        toast('Marked unpaid (₹0) but journal reverse failed — check Books → Journals', 'warning');
       }
-    } else {
+      loadBills();
+      return; // avoid second "Marked as unpaid" toast below
+
+} else {
       await saveBill(updated, { overwrite: true });
     }
     toast(`Marked as ${STATUS_CONFIG[updated.status]?.label || updated.status}`, 'info');
@@ -1211,6 +1281,7 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
             <button type="button" className="btn btn-secondary" onClick={() => {
               downloadSdExport('SD-Invoices-Export.csv', billsToSdCsv(bills));
             }}>SD Export CSV</button>
+            <button type="button" className="btn btn-secondary" onClick={() => exportInvoicesCsv(typeof filteredBills !== 'undefined' ? filteredBills : bills)}>Export CSV</button>
             <button className="btn btn-primary" onClick={onNew}><Plus size={18} /> New Invoice</button>
           </>
         ) : null}
@@ -1289,7 +1360,8 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
       )}
 
       {listMode ? null : (
-<div className="stats-grid stats-grid-4">
+<div className="stats-grid stats-grid-kpi-4"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
         <div className="stat-card">
           <div className="stat-icon stat-icon-blue"><IndianRupee size={22} /></div>
           <div style={{ flex: 1 }}>
@@ -1315,6 +1387,18 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
           </div>
         </div>
         <div className="stat-card">
+          <div className="stat-icon stat-icon-green"><TrendingUp size={22} /></div>
+          <div style={{ flex: 1 }}>
+            <p className="stat-label">Total Received</p>
+            {Object.entries(stats.byCurrency).map(([cur, v]) => (
+              <div key={cur} className="stat-value" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined, color: '#059669' }}>
+                {formatCurrency(v.received || 0, cur)}
+              </div>
+            ))}
+            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value" style={{ color: '#059669' }}>—</h2>}
+          </div>
+        </div>
+        <div className="stat-card">
           <div className="stat-icon stat-icon-amber"><Clock size={22} /></div>
           <div style={{ flex: 1 }}>
             <p className="stat-label">Outstanding</p>
@@ -1325,10 +1409,6 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
             ))}
             {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-amber">—</h2>}
           </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-purple"><Receipt size={22} /></div>
-          <div><p className="stat-label">Invoices</p><h2 className="stat-value stat-value-purple">{stats.count}</h2></div>
         </div>
       </div>
 )}
@@ -1440,7 +1520,7 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
               {[
                 ['date', 'Date'], ['invoice', 'Invoice #'], ['type', 'Type'],
                 ['client', 'Client'], ['amount', 'Amount'], ['currency', 'Currency'],
-                ['status', 'Status'], ['dueDate', 'Due date'],
+                ['status', 'Status'], ['dueDate', 'Due date'], ['workOrder', 'Work Order'],
                 ['printed', 'Print count'], ['actions', 'Actions'],
               ].map(([key, label]) => (
                 <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', cursor: 'pointer' }}>
@@ -1552,6 +1632,7 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
                   {visibleColumns.amount && <th>Amount</th>}
                   {visibleColumns.currency && <th>Currency</th>}
                   {visibleColumns.dueDate && <th>Due Date</th>}
+                  {visibleColumns.workOrder && <th>Work Order</th>}
                   {visibleColumns.printed && <th>Printed</th>}
                   <th>Paid</th>
                   {visibleColumns.status && <th>Status</th>}
@@ -1589,6 +1670,7 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
                       </td>}
                       {visibleColumns.currency && <td className="text-muted">{billCurrency}</td>}
                       {visibleColumns.dueDate && <td className="text-muted">{bill.data?.details?.dueDate ? new Date(bill.data.details.dueDate).toLocaleDateString('en-IN') : <span className="cell-empty">—</span>}</td>}
+                      {visibleColumns.workOrder && <td className="text-muted">{bill.workOrderId || bill.data?.workOrderId || bill.data?.details?.workOrderNo || <span className="cell-empty">—</span>}</td>}
                       {visibleColumns.printed && <td className="text-muted" style={{ textAlign: 'center' }}>{Number(bill.printedCount) || 0}×</td>}
                       <td className="text-muted">{(bill.paidAmount || 0) > 0 ? formatCurrency(bill.paidAmount, billCurrency) : <span className="cell-empty">—</span>}</td>
                       {visibleColumns.status && <td>

@@ -59,7 +59,10 @@ export default function CashBookView() {
     // Receipts/expenses without a journal no longer appear here — prevents
     // "cash book shows payment, ledger does not" drift.
     const entries = [];
+    const reversedIds = new Set((journals || []).map(j => j.reversesId).filter(Boolean));
     (journals || []).forEach(j => {
+      if (j.IsReversed || j.isReversed || j.reversed) return;
+      if (reversedIds.has(j.id)) return;
       (j.entries || []).forEach(e => {
         const acc = (e.account || '').toLowerCase();
         if (!/bank|cash/.test(acc)) return;

@@ -192,6 +192,7 @@ export default function ExpenseTracker() {
   };
 
   const handleSave = async () => {
+    if (!(form.costCenterId || '').trim()) { toast('Cost Center is required on every expense', 'error'); return; }
     if (!form.description.trim()) { toast('Description is required', 'warning'); return; }
     if (!form.amount || parseFloat(form.amount) <= 0) { toast('Enter a valid amount', 'warning'); return; }
     try {

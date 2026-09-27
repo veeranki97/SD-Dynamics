@@ -72,7 +72,7 @@ export default function DashboardCharts({ stats }) {
         if (pieRef.current && stats?.aging) {
           const a = stats.aging;
           const c = new Chart(pieRef.current, {
-            type: 'doughnut',
+            type: (prefs.agingChart === 'pie' ? 'pie' : prefs.agingChart === 'bar' ? 'bar' : 'doughnut'),
             data: {
               labels: ['Not due', '0–30', '31–60', '61–90', '90+'],
               datasets: [{

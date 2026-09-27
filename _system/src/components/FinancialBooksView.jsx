@@ -3,6 +3,7 @@ import { getAllJournals, saveJournal } from '../store';
 import { formatCurrency } from '../utils';
 import {
   trialBalance, balanceSheet, computeTradingPnL, siteWisePnL,
+  woWisePnL,
   periodCloseJournal, bankBalance, lockMonth, unlockMonth, isMonthLocked,
 } from '../utils/ledger';
 import { toast } from './Toast';
@@ -29,6 +30,7 @@ export default function FinancialBooksView() {
   const bs = useMemo(() => balanceSheet(journals, asOf), [journals, asOf]);
   const pnl = useMemo(() => computeTradingPnL(journals, from, asOf), [journals, from, asOf]);
   const sites = useMemo(() => siteWisePnL(journals, from, asOf), [journals, from, asOf]);
+  const wos = useMemo(() => (typeof woWisePnL === 'function' ? woWisePnL(journals, from, asOf) : []), [journals, from, asOf]);
   const bank = useMemo(() => bankBalance(journals, 'Bank') + bankBalance(journals, 'Cash'), [journals]);
 
   const runPeriodClose = async () => {
@@ -49,6 +51,7 @@ export default function FinancialBooksView() {
     { id: 'bs', label: 'Balance Sheet' },
     { id: 'pnl', label: 'P&L' },
     { id: 'site', label: 'Site-wise P&L' },
+    { id: 'wo', label: 'WO-wise P&L' },
     { id: 'lock', label: 'Period Lock' },
   ];
 
@@ -69,7 +72,7 @@ export default function FinancialBooksView() {
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => {
             if (tab === 'tb') downloadCsv('trial-balance.csv', tb, ['account', 'debit', 'credit', 'balance']);
             else if (tab === 'pnl') downloadCsv('pnl.csv', [pnl], ['sales', 'purchases', 'expenses', 'grossProfit', 'netProfit']);
-            else if (tab === 'site') downloadCsv('site-pnl.csv', sites, ['site', 'income', 'expense', 'profit']);
+            else if (tab === 'site' || tab === 'wo') downloadCsv('site-pnl.csv', sites, ['site', 'income', 'expense', 'profit']);
           }}>Export CSV</button>
         </div>
       </div>
@@ -168,7 +171,7 @@ export default function FinancialBooksView() {
         <table className="data-table" style={{ width: '100%' }}>
           <thead><tr><th>Site</th><th className="text-end">Income</th><th className="text-end">Expense</th><th className="text-end">Profit</th></tr></thead>
           <tbody>
-            {sites.map(s => (
+            {(tab === 'wo' ? wos : sites).map(s => (
               <tr key={s.site}>
                 <td>{s.site}</td>
                 <td className="text-end">{formatCurrency(s.income)}</td>

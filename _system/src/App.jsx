@@ -486,6 +486,9 @@ function App() {
     const clone = JSON.parse(JSON.stringify(bill));
     clone._isDuplicate = true;
     clone._convertToType = 'tax-invoice';
+    clone._sourceProformaId = bill.id;
+    clone._sourceProformaNumber = bill.invoiceNumber || bill.id;
+    clone.id = undefined;
     setEditingBill(clone);
     setCurrentView('new');
   };
@@ -509,27 +512,39 @@ function App() {
   // P1: Grouped navigation (Sales / Orders / Parties / Money / Books / Compliance)
   const navItems = [
     { id: 'dashboard', icon: Home, label: 'Dashboard', module: 'dashboard', group: 'Home' },
+    // Sales
     { id: 'invoices', icon: FileText, label: 'Invoices', module: 'invoicing', group: 'Sales' },
     { id: 'new', icon: Plus, label: 'New Invoice', onClick: handleNewInvoice, module: 'invoicing', group: 'Sales', parent: 'invoices' },
     { id: 'recurring', icon: RefreshCw, label: 'Recurring', module: 'recurring', group: 'Sales', parent: 'invoices' },
+    // Orders
     { id: 'workorders', icon: ClipboardList, label: 'Work Orders', module: 'dashboard', group: 'Orders' },
     { id: 'purchaseorders', icon: ShoppingBag, label: 'Purchase Orders', module: 'purchases', group: 'Orders' },
+    // Parties
     { id: 'clients', icon: Users, label: 'Clients', module: 'clients', group: 'Parties' },
     { id: 'vendors', icon: Users, label: 'Vendors', module: 'clients', group: 'Parties' },
+    // Money (contiguous — no duplicate MONEY section)
     { id: 'receipts', icon: Receipt, label: 'Receipts', module: 'receipts', group: 'Money' },
     { id: 'payrecon', icon: Receipt, label: 'Payment Recon', module: 'reports', group: 'Money' },
     { id: 'cashbook', icon: Banknote, label: 'Cash Book', module: 'reports', group: 'Money' },
     { id: 'bankfeed', icon: Banknote, label: 'Bank Feed', module: 'reports', group: 'Money' },
-    { id: 'vouchers', icon: BookOpen, label: 'Vouchers', module: 'reports', group: 'Books' },
     { id: 'expenses', icon: Wallet, label: 'Expenses', module: 'expenses', group: 'Money' },
+    // Purchases
     { id: 'purchases', icon: ShoppingCart, label: 'Purchases', module: 'purchases', group: 'Purchases' },
+    // Books (contiguous)
+    { id: 'vouchers', icon: BookOpen, label: 'Vouchers', module: 'reports', group: 'Books' },
     { id: 'coa', icon: BookOpen, label: 'Chart of Accounts', module: 'reports', group: 'Books' },
-    { id: 'costcenters', icon: Building2, label: 'Cost Centers', module: 'settings', group: 'Books' },
     { id: 'generalledger', icon: BookOpen, label: 'General Ledger', module: 'reports', group: 'Books' },
     { id: 'finbooks', icon: BookOpen, label: 'Trial Balance / BS', module: 'reports', group: 'Books' },
+    // Compliance
     { id: 'reports', icon: BarChart3, label: 'Reports', module: 'reports', group: 'Compliance' },
     { id: 'filing', icon: BookOpen, label: 'GST Returns', module: 'gstReturns', group: 'Compliance' },
     { id: 'incometax', icon: Calculator, label: 'Income Tax', module: 'incomeTax', group: 'Compliance' },
+    // System — Notifications, Dark Mode, Control Panel, Settings (as in product UI)
+    { id: 'notifications', icon: Bell, label: 'Notifications', module: 'dashboard', group: 'System', onClick: () => setShowNotifs(true) },
+    { id: 'darkmode', icon: Moon, label: 'Dark Mode', module: 'dashboard', group: 'System', onClick: () => setDarkMode(d => !d) },
+    { id: 'controlpanel', icon: HardDrive, label: 'Control Panel', module: 'settings', group: 'System' },
+    { id: 'settings', icon: Settings, label: 'Settings', module: 'settings', group: 'System' },
+    { id: 'costcenters', icon: Building2, label: 'Master data', module: 'settings', group: 'System' },
     { id: 'inventory', icon: Package, label: 'Services', module: 'inventory', group: 'System' },
     { id: 'guide', icon: HelpCircle, label: 'User Guide', module: 'dashboard', group: 'System' },
   ].filter(item => showIfModule(item.module));
@@ -881,9 +896,22 @@ function App() {
                         className={`nav-btn ${currentView === item.id ? 'nav-btn-active' : ''}${isNested ? ' nav-btn-nested' : ''}`}
                         onClick={item.onClick || (() => setCurrentView(item.id))}
                         title={item.label}
+                        style={item.id === 'notifications' && notifTotal > 0 ? { position: 'relative' } : undefined}
                       >
-                        <item.icon size={isNested ? 16 : 18} />
-                        <span className="nav-label">{item.label}</span>
+                        {item.id === 'darkmode'
+                          ? (darkMode ? <Sun size={isNested ? 16 : 18} /> : <Moon size={isNested ? 16 : 18} />)
+                          : <item.icon size={isNested ? 16 : 18} />}
+                        <span className="nav-label">
+                          {item.id === 'darkmode' ? (darkMode ? 'Light Mode' : 'Dark Mode') : item.label}
+                        </span>
+                        {item.id === 'notifications' && notifTotal > 0 && (
+                          <span style={{
+                            marginLeft: 'auto', minWidth: 18, height: 18, padding: '0 5px', borderRadius: '9px',
+                            background: 'var(--danger)', color: '#fff',
+                            fontSize: '0.65rem', fontWeight: 700,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>{notifTotal > 99 ? '99+' : notifTotal}</span>
+                        )}
                       </button>
                     );
                   })}
@@ -919,56 +947,8 @@ function App() {
                 }} />
               </button>
             )}
-            {/* Notification bell — opens a popover listing overdue / due-soon
-                invoices, GST filing deadlines, and low-stock items. Each row
-                is a single click away from the page that fixes it. */}
-            <button
-              className="nav-btn"
-              onClick={() => setShowNotifs(s => !s)}
-              title="Notifications"
-              style={{ position: 'relative' }}
-            >
-              <Bell size={18} />
-              Notifications
-              {notifTotal > 0 && (
-                <span style={{
-                  position: 'absolute', top: '8px', right: '12px',
-                  minWidth: 18, height: 18, padding: '0 5px', borderRadius: '9px',
-                  background: 'var(--danger)', color: '#fff',
-                  fontSize: '0.65rem', fontWeight: 700,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>{notifTotal > 99 ? '99+' : notifTotal}</span>
-              )}
-            </button>
-            <button
-              className="nav-btn"
-              onClick={() => setDarkMode(!darkMode)}
-              title={darkMode ? 'Light Mode' : 'Dark Mode'}
-            >
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-              {darkMode ? 'Light Mode' : 'Dark Mode'}
-            </button>
-            <button
-              className={`nav-btn ${currentView === 'controlpanel' ? 'nav-btn-active' : ''}`}
-              onClick={() => setCurrentView('controlpanel')}
-              title="Update, backup, restore, move to another PC"
-            >
-              <HardDrive size={18} /> Control Panel
-            </button>
-            <button
-              className={`nav-btn ${currentView === 'settings' ? 'nav-btn-active' : ''}`}
-              onClick={() => setCurrentView('settings')}
-              style={updateBannerVisible ? { position: 'relative' } : undefined}
-            >
-              <Settings size={18} /> Settings
-              {updateBannerVisible && (
-                <span style={{
-                  position: 'absolute', top: '8px', right: '12px',
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: '#f59e0b',
-                }} title="Update available" />
-              )}
-            </button>
+            {/* System items (Notifications, Dark Mode, Control Panel, Settings)
+                live once under the SYSTEM group in navItems — do not duplicate here. */}
             <div className={`server-status server-status-${serverStatus}`}>
               <span className="server-status-dot" />
               {serverStatus === 'online' ? 'App Ready' : serverStatus === 'offline' ? 'App Not Running' : 'Connecting...'}

@@ -1360,7 +1360,8 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
       )}
 
       {listMode ? null : (
-<div className="stats-grid stats-grid-kpi-4">
+<div className="stats-grid stats-grid-kpi-4"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
         <div className="stat-card">
           <div className="stat-icon stat-icon-blue"><IndianRupee size={22} /></div>
           <div style={{ flex: 1 }}>
@@ -1408,10 +1409,6 @@ export default function Dashboard({ onNew, onEdit, onDuplicate, onConvert, onOpe
             ))}
             {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-amber">—</h2>}
           </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-purple"><Receipt size={22} /></div>
-          <div><p className="stat-label">Invoices</p><h2 className="stat-value stat-value-purple">{stats.count}</h2></div>
         </div>
       </div>
 )}

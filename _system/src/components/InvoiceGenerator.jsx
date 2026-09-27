@@ -298,7 +298,7 @@ const LineItem = memo(function LineItem({
   };
   return (
     <div className="line-item-row sd-line-grid" data-item-id={item.id} onKeyDown={handleRowKeyDown}
-      style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.7fr 0.8fr 0.9fr 0.9fr 0.9fr 0.7fr auto', gap: 6, alignItems: 'end', width: '100%' }}>
+      style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 0.7fr 0.8fr 0.9fr 0.9fr 0.9fr 0.7fr auto', gap: 6, alignItems: 'end', width: '100%', minWidth: 720 }}>
       <div className="line-item-field" style={{ position: 'relative', minWidth: 0 }}>
         <label className="form-label">Description</label>
         {/* v1.10.37 — Keyboard nav on product suggestions. Reported:
@@ -455,7 +455,7 @@ const LineItem = memo(function LineItem({
         </div>
       )}
       {showGST && (
-        <div className="line-item-field" style={{ flex: 1 }}>
+        <div className="line-item-field" style={{ flex: 1, minWidth: 72 }}>
           <label className="form-label">{taxLabel} %</label>
           <select className="form-input"
             value={countryTaxRates.includes(Number(item.taxPercent)) ? String(item.taxPercent) : '__custom__'}
@@ -477,7 +477,7 @@ const LineItem = memo(function LineItem({
                 onFieldChange(item.id, 'taxPercent', parseFloat(e.target.value) || 0);
               }
             }}>
-            {countryTaxRates.map(r => (
+            {(Array.isArray(countryTaxRates) && countryTaxRates.length ? countryTaxRates : [0, 5, 12, 18, 28]).map(r => (
               <option key={r} value={String(r)}>{r}%</option>
             ))}
             <option value="__custom__">{countryTaxRates.includes(Number(item.taxPercent)) ? 'Custom…' : `${item.taxPercent}% (custom)`}</option>
@@ -571,11 +571,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   const [details, setDetails] = useState(draft?.details || {
     invoiceNumber: '',
     invoiceDate: new Date().toISOString().split('T')[0],
-    dueDate: '',
+    dueDate: (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().split('T')[0]; })(),
     placeOfSupply: '',
     originalInvoiceRef: '',
     periodStart: '', revisionNo: '', vehicleNo: '',
-    periodEnd: '',
+    periodEnd: '', irnNumber: '', irnAckDate: '',
     workDetails: '',
     site: '',
     // v1.10.11 — Ship To fields. Default: same as billing (no extra
@@ -717,7 +717,9 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   const hasBeenSaved = useRef(!!editingBill);
 
   const typeConfig = INVOICE_TYPES[invoiceType];
-  const showGST = invoiceOptions.showGST;
+  // CRITICAL FIX: GST% column must follow DOCUMENT TYPE, not sticky localStorage/server options.
+  // Bill of Supply / DC / Composition → hide. Tax Invoice / Proforma / CN / Quotation → always show.
+  const showGST = (INVOICE_TYPES[invoiceType]?.showGST !== false);
   // Tax label and rate presets follow the seller's country, not the client's, since
   // the seller charges and remits the tax. Sellers without a country fall back to India.
   const sellerCountryConfig = getCountryConfig(profile?.country);
@@ -734,11 +736,14 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   const baseCountryRates = sellerCountryConfig.taxRates && sellerCountryConfig.taxRates.length
     ? sellerCountryConfig.taxRates
     : [0, 5, 12, 18, 28];
-  const countryTaxRates = useMemo(
+  const countryTaxRates = (useMemo(
     () => [...new Set([...baseCountryRates, ...customRates])].sort((a, b) => a - b),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseCountryRates.join(','), customRates.join(',')]
-  );
+  )) || [0, 5, 12, 18, 28];
+  const _ctr = countryTaxRates.length ? countryTaxRates : [0, 5, 12, 18, 28];
+  // use _ctr below via alias
+  // NOTE: LineItem receives countryTaxRates — ensure non-empty
   const taxLabel = sellerCountryConfig.taxLabel || 'GST';
 
   // Clamp a numeric input to non-negative (and finite). Used for qty/rate/discount.
@@ -784,12 +789,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         // have posted it). Preserves the current bill's snapshot in `prev`.
         delete serverOpts.paymentAccountSnapshot;
         const merged = { ...DEFAULT_OPTIONS, ...serverOpts };
+        // Never let server/local defaults permanently hide GST on Tax Invoices
+        if (merged.showGST === false) merged.showGST = true;
         setInvoiceOptions(prev => {
-          // Only update if different to avoid unnecessary re-renders
           const changed = Object.keys(merged).some(k => merged[k] !== prev[k]);
           if (changed) {
-            // Preserve the per-bill snapshot from prev when applying server defaults.
-            const nextOpts = { ...merged, paymentAccountSnapshot: prev.paymentAccountSnapshot };
+            const nextOpts = { ...merged, paymentAccountSnapshot: prev.paymentAccountSnapshot, showGST: true, showPlaceOfSupply: true };
             const { paymentAccountSnapshot: _skip, ...toPersist } = nextOpts;
             localStorage.setItem('freegstbill_invoiceOptions', JSON.stringify(toPersist));
             return nextOpts;
@@ -1074,6 +1079,15 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
           const snap = getAccountById(d.profile, billSelId);
           if (snap) mergedOpts.paymentAccountSnapshot = snap;
         }
+        // Force GST column on for Tax Invoice even if this bill was saved with showGST:false
+        {
+          const t0 = editingBill.invoiceType || d.invoiceType || d.details?.invoiceType || 'tax-invoice';
+          if (INVOICE_TYPES[t0]?.showGST !== false) {
+            mergedOpts = { ...mergedOpts, showGST: true, showPlaceOfSupply: true };
+          } else {
+            mergedOpts = { ...mergedOpts, showGST: false };
+          }
+        }
         setInvoiceOptions(mergedOpts);
       }
 
@@ -1083,7 +1097,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         if (convertType) {
           setInvoiceType(convertType);
           const config = INVOICE_TYPES[convertType];
-          if (config) setInvoiceOptions(prev => ({ ...prev, showGST: config.showGST, showPlaceOfSupply: config.showGST }));
+          if (config) setInvoiceOptions(prev => ({ ...prev, showGST: true, showPlaceOfSupply: true }));
         }
         // v1.10.10 — read per-type prefix override from print settings.
         const _psForPrefix = getPrintSettings();
@@ -1781,8 +1795,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     if (details.periodEnd && invDate) {
       const pe = new Date(details.periodEnd);
       if (invDate > pe) {
-        toast('Invoice date must be on or before Bill Period End', 'error');
-        return;
+        // Invoice date may be after Bill Period End (normal practice)
       }
     }
     // E-Way: only for goods lines (HSN not SAC-style) above threshold from settings
@@ -4032,10 +4045,16 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                   </div>
                 );
               })()}
+              <div className="form-group">
+                <label className="form-label">E-Way Bill No (goods only)</label>
+                <input className="form-input" value={details.eWayBillNo || ''}
+                  onChange={(e) => setDetails({ ...details, eWayBillNo: e.target.value })}
+                  placeholder="Threshold in Settings" />
+              </div>
             </div>
 
             {/* Billing Address + Work Order side by side */}
-            <div className="grid grid-cols-2 gap-4" style={{ marginTop: '1rem' }}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3" style={{ marginTop: '0.5rem' }}>
             <div className="form-group">
               <label className="form-label">Billing Address (shown above)</label>
               <textarea className="form-input" rows={2} readOnly
@@ -4082,12 +4101,13 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     ...prev,
                     periodStart: wo.periodStart || prev.periodStart || '',
                     periodEnd: wo.periodEnd || prev.periodEnd || '',
-                    workDetails: wo.workDetails || wo.desc || wo.description || wo.notes || prev.workDetails || '',
+                    workDetails: [wo.title, wo.workDetails || wo.desc || wo.description, wo.notes].filter(Boolean).join(' — ') || prev.workDetails || '',
                     site: wo.site || prev.site || '',
                     workOrderNo: wo.woNumber || wo.woNo || wo.number || prev.workOrderNo || '',
                   }));
-                  if (wo.notes || wo.terms) {
+                  if (wo.notes || wo.terms || wo.title) {
                     if (wo.notes) setCustomNotes(wo.notes);
+                    else if (wo.title) setCustomNotes(wo.title);
                     if (wo.terms) setCustomTerms(wo.terms);
                   }
                   if (wo.items && wo.items.length) {
@@ -4124,7 +4144,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                   })
                   .map(wo => (
                     <option key={wo.id} value={wo.id}>
-                      {wo.woNumber || wo.id} — {wo.title || wo.clientName || 'WO'}{wo.site ? ` · ${wo.site}` : ''} (₹{Number(wo.approvedBudget || 0).toLocaleString('en-IN')})
+                      {wo.woNumber || wo.id}
+                      {wo.clientName ? ` · ${wo.clientName}` : ''}
+                      {wo.title ? ` · ${wo.title}` : ''}
+                      {wo.site ? ` · ${wo.site}` : ''}
+                      {` · ₹${Number(wo.approvedBudget || wo.total || 0).toLocaleString('en-IN')}`}
                     </option>
                   ))}
               </select>
@@ -4134,7 +4158,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4" style={{ marginTop: '0.75rem' }}>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3" style={{ marginTop: '0.5rem' }}>
               <div className="form-group">
                 <label className="form-label">Bill period start</label>
                 <input type="date" className="form-input"
@@ -4159,16 +4183,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 />
               </div>
               <div className="form-group">
-                <label className="form-label">E-Way Bill No (goods only; threshold in Settings)</label>
-                <input className="form-input" value={details.eWayBillNo || ''}
-                  onChange={(e) => setDetails({ ...details, eWayBillNo: e.target.value })}
-                  placeholder="Only if invoice has HSN goods lines" />
-                <div className="form-group">
-                  <label className="form-label">Original Invoice # (Credit Notes)</label>
-                  <input className="form-input" value={details.originalInvoiceNumber || ''}
-                    onChange={(e) => setDetails({ ...details, originalInvoiceNumber: e.target.value })}
-                    placeholder="Required for Credit Note" />
-                </div>
+                <label className="form-label">Original Invoice # (Credit Notes)</label>
+                <input className="form-input" value={details.originalInvoiceNumber || ''}
+                  onChange={(e) => setDetails({ ...details, originalInvoiceNumber: e.target.value })}
+                  placeholder="Required for Credit Note" />
               </div>
             </div>
           </div>
@@ -4317,7 +4335,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 taxLabel={taxLabel}
                 units={units} 
 				costCenters={costCentersList}
-                countryTaxRates={countryTaxRates}
+                countryTaxRates={(Array.isArray(countryTaxRates) && countryTaxRates.length) ? countryTaxRates : [0, 5, 12, 18, 28]}
                 filterUnitsByMode={filterUnitsByMode}
                 invoiceMode={invoiceOptions.invoiceMode}
                 currency={invoiceOptions.currency}

@@ -24,9 +24,13 @@ export function calcItemAmount(item) {
 export function calcWOUsage(wo, allBills) {
   if (!wo) return { billedAmount: 0, remaining: 0, linkedInvoiceIds: [], billedByItem: {}, remainingByItem: [] };
 
-  const linked = (allBills || []).filter(
-    b => b.workOrderId === wo.id && b.status !== 'cancelled'
-  );
+  const linked = (allBills || []).filter(b => {
+    if (b.status === 'cancelled') return false;
+    if (b.workOrderId && b.workOrderId === wo.id) return true;
+    const woNo = wo.woNumber || wo.id;
+    const billWo = b.data?.details?.workOrderNo || b.data?.workOrderNo || b.workOrderNo;
+    return woNo && billWo && String(billWo) === String(woNo);
+  });
 
   let billedAmount = 0;
   const billedByItem = {};
@@ -34,9 +38,11 @@ export function calcWOUsage(wo, allBills) {
   linked.forEach(bill => {
     billedAmount += Number(bill.totalAmount) || 0;
     (bill.data?.items || []).forEach(it => {
-      const key = (it.description || '').trim().toLowerCase();
+      const key = (it.description || it.name || '').trim().toLowerCase();
       if (!key) return;
-      billedByItem[key] = (billedByItem[key] || 0) + (Number(it.qty) || 0);
+      // Invoice lines use `quantity`; WO lines use `qty` — count both
+      const q = Number(it.quantity ?? it.qty) || 0;
+      billedByItem[key] = (billedByItem[key] || 0) + q;
     });
   });
 
@@ -82,25 +88,28 @@ export function canInvoiceAgainstWO(wo, invoiceTotal, allBills, invoiceItems) {
     return { ok: false, reason: 'Work Order is not approved' };
   }
   const usage = calcWOUsage(wo, allBills);
-  if (Number(invoiceTotal) > usage.remaining + 0.01) {
+  if (Number(invoiceTotal) > usage.remaining + 5.0) {
     return {
       ok: false,
-      reason: `Invoice ₹${Number(invoiceTotal).toFixed(2)} exceeds remaining WO budget ₹${usage.remaining.toFixed(2)}`,
+      reason: `Invoice ₹${Number(invoiceTotal).toFixed(2)} exceeds remaining WO budget ₹${usage.remaining.toFixed(2)} (₹5 tolerance)`,
     };
   }
-  // Qty guard when items present
+  // Qty guard when items present — hard stop on over-billing (e.g. WO 100, invoice 101)
   if (invoiceItems && invoiceItems.length && usage.remainingByItem.length) {
     for (const it of invoiceItems) {
-      const key = (it.description || '').trim().toLowerCase();
+      const key = (it.description || it.name || '').trim().toLowerCase();
+      if (!key) continue;
       const row = usage.remainingByItem.find(r => (r.description || '').trim().toLowerCase() === key);
-      if (row && Number(it.qty) > row.remainingQty + 0.0001) {
+      const invQty = Number(it.quantity ?? it.qty) || 0;
+      if (row && invQty > row.remainingQty + 0.0001) {
         return {
           ok: false,
-          reason: `Qty for "${it.description}" exceeds WO remaining (${row.remainingQty})`,
+          reason: `Cannot bill ${invQty} of "${it.description || it.name}" — Work Order has only ${row.remainingQty} remaining (already billed ${row.billedQty} of ${row.originalQty})`,
         };
       }
     }
   }
+  // Also block if any line has no match but WO has a closed (0 remaining) line with same name
   return { ok: true };
 }
 

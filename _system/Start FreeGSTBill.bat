@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 :: ===============================================================
-:: Free GST Billing Software - Launcher
+:: SD Dynamics - Launcher
 :: ---------------------------------------------------------------
 :: Behaviour:
 ::   1. If not installed -> run Install.bat
@@ -17,7 +17,7 @@ cd /d "%~dp0"
 
 :: Step 1: Verify install
 if not exist "node_modules" (
-    echo Free GST Billing Software is not installed yet. Running installer...
+    echo SD Dynamics is not installed yet. Running installer...
     call "%~dp0Install FreeGSTBill.bat"
     exit /b
 )

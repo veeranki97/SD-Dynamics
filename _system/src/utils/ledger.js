@@ -7,6 +7,7 @@ export const ACCOUNTS = {
   SGST_OUT: 'Output SGST',
   IGST_OUT: 'Output IGST',
   DEBTORS: 'Sundry Debtors',
+  ADVANCE_RECEIVED: 'Advance from Customers',
   CREDITORS: 'Sundry Creditors',
   CASH_BANK: 'Bank',
   CASH: 'Cash',
@@ -33,6 +34,7 @@ export const ACCOUNT_TYPES = {
   [ACCOUNTS.SGST_OUT]: 'liability',
   [ACCOUNTS.IGST_OUT]: 'liability',
   [ACCOUNTS.DEBTORS]: 'asset',
+  [ACCOUNTS.ADVANCE_RECEIVED]: 'liability',
   [ACCOUNTS.CREDITORS]: 'liability',
   [ACCOUNTS.CASH_BANK]: 'asset',
   [ACCOUNTS.CASH]: 'asset',
@@ -51,6 +53,21 @@ export const ACCOUNT_TYPES = {
 export function money(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
+
+/** Sprint 1: Soft-delete / reverse flag — active books ignore reversed journals. */
+export function isActiveJournal(j) {
+  if (!j) return false;
+  if (j.IsReversed === true || j.isReversed === true || j.reversed === true) return false;
+  return true;
+}
+
+export function activeJournals(journals) {
+  const list = journals || [];
+  const reversedIds = new Set(list.map(j => j.reversesId).filter(Boolean));
+  return list.filter(j => isActiveJournal(j) && !reversedIds.has(j.id));
+}
+
+
 
 /**
  * Classify account name → type.
@@ -127,11 +144,19 @@ export function journalFromPayment(bill, paymentAmount, mode = 'bank', paymentMe
   const party = bill.data?.client?.name || bill.clientName || paymentMeta.party || '';
   const payDate = paymentMeta.date || new Date().toISOString().split('T')[0];
   const payId = paymentMeta.id || String(Date.now());
+  const isAdvance = /advance/i.test(String(mode)) || /advance/i.test(String(paymentMeta.note || ''))
+    || (bill.invoiceType || bill.data?.invoiceType || '').toLowerCase().includes('proforma');
+  const creditAcc = isAdvance ? ACCOUNTS.ADVANCE_RECEIVED : ACCOUNTS.DEBTORS;
   return {
+    site: bill.site || bill.data?.site || paymentMeta.site || null,
+    costCenterId: bill.costCenterId || bill.data?.costCenterId || paymentMeta.costCenterId || null,
+    workOrderId: bill.workOrderId || bill.data?.workOrderId || paymentMeta.workOrderId || null,
     id: 'jnl_pay_' + (bill.id || bill.invoiceNumber) + '_' + payId,
     date: payDate,
-    narration: `Receipt against ${bill.invoiceNumber || bill.id || ''} — ${party || 'customer'}`,
-    refType: 'payment',
+    narration: isAdvance
+      ? `Advance received — ${party || 'customer'}`
+      : `Receipt against ${bill.invoiceNumber || bill.id || ''} — ${party || 'customer'}`,
+    refType: isAdvance ? 'advance' : 'payment',
     refId: bill.id || bill.invoiceNumber,
     party,
     clientName: party,
@@ -141,7 +166,7 @@ export function journalFromPayment(bill, paymentAmount, mode = 'bank', paymentMe
     costCenterId: bill.costCenterId || bill.data?.costCenterId || null,
     entries: [
       { account: bankAcc, debit: amt, credit: 0, party },
-      { account: ACCOUNTS.DEBTORS, debit: 0, credit: amt, party },
+      { account: creditAcc, debit: 0, credit: amt, party },
     ],
   };
 }
@@ -202,7 +227,7 @@ export function journalFromExpense(exp) {
 
 export function trialBalance(journals, untilDate) {
   const map = {};
-  (journals || []).forEach(j => {
+  activeJournals(journals).forEach(j => {
     if (untilDate && j.date && j.date > untilDate) return;
     (j.entries || []).forEach(e => {
       if (!map[e.account]) map[e.account] = { account: e.account, debit: 0, credit: 0 };
@@ -235,7 +260,7 @@ const PL_EXP = /expense|cost|salary|rent|purchase|direct|indirect|round\s*off/i;
 export function computeTradingPnL(journals, fromDate, toDate, accountTypeOverrides = null) {
   let sales = 0, purchases = 0, expenses = 0, otherIncome = 0;
   const unclassified = [];
-  (journals || []).forEach(j => {
+  activeJournals(journals).forEach(j => {
     const d = j.date || '';
     if (fromDate && d < fromDate) return;
     if (toDate && d > toDate) return;
@@ -317,6 +342,7 @@ export function balanceSheet(journals, asOfDate, accountTypeOverrides = null) {
 
 /** Site-wise P&L — same classifier as computeTradingPnL */
 export function siteWisePnL(journals, fromDate, toDate, accountTypeOverrides = null) {
+  journals = activeJournals(journals);
   const bySite = {};
   (journals || []).forEach(j => {
     const d = j.date || '';
@@ -457,4 +483,31 @@ export function unlockMonth(yyyyMm) {
   let locked = JSON.parse(localStorage.getItem('fgsb_locked_months') || '[]');
   locked = locked.filter(m => m !== key);
   localStorage.setItem('fgsb_locked_months', JSON.stringify(locked));
+}
+
+
+/** Sprint 3: Aggregate income/expense by workOrderId on journal headers. */
+export function woWisePnL(journals, fromDate, toDate, accountTypeOverrides = null) {
+  const map = {};
+  activeJournals(journals).forEach(j => {
+    const d = j.date || '';
+    if (fromDate && d < fromDate) return;
+    if (toDate && d > toDate) return;
+    if (j.refType === 'period-close') return;
+    const wo = j.workOrderId || j.woNumber || j.workOrderNo || 'Unassigned';
+    if (!map[wo]) map[wo] = { workOrderId: wo, income: 0, expense: 0, net: 0 };
+    (j.entries || []).forEach(e => {
+      const type = classifyAccount(e.account || '', accountTypeOverrides);
+      const cr = money(e.credit);
+      const dr = money(e.debit);
+      if (type === 'income') map[wo].income += cr - dr;
+      else if (type === 'expense') map[wo].expense += dr - cr;
+    });
+  });
+  return Object.values(map).map(r => ({
+    ...r,
+    income: money(r.income),
+    expense: money(r.expense),
+    net: money(r.income - r.expense),
+  })).sort((a, b) => b.net - a.net);
 }

@@ -13,6 +13,7 @@ import { emptyWOItem, calcItemAmount } from '../utils/workOrder';
 import { formatCurrency } from '../utils';
 import { toast } from './Toast';
 import ActionMenu from './ActionMenu';
+import { getHsnMaster, getUnitMaster } from '../utils/masterData';
 function downloadRowsCsv(filename, rows, cols) {
   const esc = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const headers = cols.map(c => c.label);
@@ -69,76 +70,134 @@ async function sha256Hex(text) {
 
 function printPO(po, profile, fingerprint) {
   const t = calcPOTotals(po.items, po.taxRate, po.vendorState, profile?.state);
-  const rows = (po.items || []).map((it, i) =>
-    `<tr>
-      <td style="border:1px solid #333;padding:6px;text-align:center">${i + 1}</td>
-      <td style="border:1px solid #333;padding:6px">${it.description || ''}</td>
-      <td style="border:1px solid #333;padding:6px;text-align:center">${it.hsn || ''}</td>
-      <td style="border:1px solid #333;padding:6px;text-align:center">${it.qty || 0}</td>
-      <td style="border:1px solid #333;padding:6px;text-align:center">${it.unit || ''}</td>
-      <td style="border:1px solid #333;padding:6px;text-align:right">${Number(it.rate || 0).toFixed(2)}</td>
-      <td style="border:1px solid #333;padding:6px;text-align:right">${calcItemAmount(it).toFixed(2)}</td>
-    </tr>`
-  ).join('');
+  const terms = (po.terms || po.notes || profile?.defaultTerms ||
+    '1. Please quote PO number on all invoices and delivery challans.\n2. Goods/services subject to inspection and approval.\n3. Payment as per agreed terms.').replace(/\n/g, '<br/>');
+  const notes = (po.notes || '').replace(/</g, '&lt;').replace(/\n/g, '<br/>');
+  const sigSrc = profile?.signature || profile?.signatureImage || '';
+  const rows = (po.items || []).map((it, i) => {
+    const amt = calcItemAmount(it);
+    return `<tr>
+      <td class="cell c">${i + 1}</td>
+      <td class="cell">${(it.description || '').replace(/</g,'&lt;')}</td>
+      <td class="cell c">${it.hsn || ''}</td>
+      <td class="cell c">${it.unit || ''}</td>
+      <td class="cell c">${it.qty || 0}</td>
+      <td class="cell r">${Number(it.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      <td class="cell r">${amt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+    </tr>`;
+  }).join('');
   const taxRows = t.isInterstate
-    ? `<tr><td colspan="6" style="text-align:right;padding:4px">IGST @ ${po.taxRate || 0}%</td><td style="text-align:right;padding:4px">${t.igst.toFixed(2)}</td></tr>`
-    : `<tr><td colspan="6" style="text-align:right;padding:4px">CGST</td><td style="text-align:right;padding:4px">${t.cgst.toFixed(2)}</td></tr>
-       <tr><td colspan="6" style="text-align:right;padding:4px">SGST</td><td style="text-align:right;padding:4px">${t.sgst.toFixed(2)}</td></tr>`;
-  const html = `<!DOCTYPE html><html><head><title>${po.poNumber}</title>
-    <style>
-      body{font-family:Helvetica,Arial,sans-serif;font-size:12px;color:#111;padding:16px}
-      h1{margin:0 0 4px;font-size:20px} h2{margin:0 0 12px;font-size:14px;color:#444}
-      table{width:100%;border-collapse:collapse;margin-top:12px}
-      .meta td{padding:3px 8px 3px 0}
-      .footer{margin-top:24px;font-size:10px;color:#666;border-top:1px dashed #ccc;padding-top:8px;text-align:center;font-style:italic}
-    </style></head><body>
-    <h1>${profile?.businessName || 'Business'}</h1>
-    <div style="font-size:11px;color:#555">${[profile?.address, profile?.city, profile?.state, profile?.gstin].filter(Boolean).join(' · ')}</div>
-    <h2 style="margin-top:16px">PURCHASE ORDER — ${po.poNumber}</h2>
-    <table class="meta">
-      <tr><td><b>Date</b></td><td>${po.date || ''}</td><td><b>Vendor</b></td><td>${po.vendorName || ''}</td></tr>
-      <tr><td><b>Ship To / Site</b></td><td>${po.site || ''}</td><td><b>Vendor GSTIN</b></td><td>${po.vendorGstin || '—'}</td></tr>
-      <tr><td><b>Vendor State</b></td><td>${po.vendorState || '—'}</td><td><b>Status</b></td><td>${po.status || ''}</td></tr>
-    </table>
-    <table>
-      <thead><tr style="background:#f4f4f4">
-        <th style="border:1px solid #333;padding:6px">#</th>
-        <th style="border:1px solid #333;padding:6px">Description</th>
-        <th style="border:1px solid #333;padding:6px">HSN/SAC</th>
-        <th style="border:1px solid #333;padding:6px">Qty</th>
-        <th style="border:1px solid #333;padding:6px">Unit</th>
-        <th style="border:1px solid #333;padding:6px">Rate</th>
-        <th style="border:1px solid #333;padding:6px">Amount</th>
-      </tr></thead>
-      <tbody>${rows}
-        <tr><td colspan="6" style="text-align:right;padding:6px;font-weight:600">Taxable</td><td style="text-align:right;padding:6px;font-weight:600">${t.sub.toFixed(2)}</td></tr>
-        ${taxRows}
-        <tr><td colspan="6" style="text-align:right;padding:6px;font-weight:700">Grand Total</td><td style="text-align:right;padding:6px;font-weight:700">${t.total.toFixed(2)}</td></tr>
-      </tbody>
-    </table>
-    ${po.notes ? `<p style="margin-top:12px"><b>Notes:</b> ${po.notes}</p>` : ''}
-    <div class="footer">
-      This is a Computer Generated Transaction — Generated on ${new Date().toLocaleString('en-IN')}<br/>
-      🔒 SHA-256 Digital Fingerprint: <span style="font-family:monospace">${fingerprint || '—'}</span>
+    ? `<div class="tot-row"><span>IGST (${Number(po.taxRate || 0).toFixed(2)}%):</span><span>₹${t.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`
+    : `<div class="tot-row"><span>CGST:</span><span>₹${t.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+       <div class="tot-row"><span>SGST:</span><span>₹${t.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`;
+  const shipName = po.shipToName || po.deliverySite || po.site || '';
+  const shipAddr = po.shipToAddress || po.deliveryAddress || '';
+  const shipState = po.shipToState || po.deliveryState || '';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${po.poNumber || 'PO'}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; margin: 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+  .co-name { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
+  .co-meta { font-size: 10px; line-height: 1.45; color: #333; margin-top: 4px; }
+  .po-title { font-size: 16px; font-weight: 800; text-align: right; }
+  .po-meta { font-size: 11px; text-align: right; margin-top: 4px; line-height: 1.5; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #111; margin-bottom: 10px; }
+  .two > div { padding: 8px 10px; }
+  .two > div:first-child { border-right: 1px solid #111; }
+  .sec-h { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #444; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-bottom: 6px; }
+  .subj { border: 1px solid #111; padding: 8px 10px; margin-bottom: 10px; }
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  table.items th, table.items td { border: 1px solid #111; padding: 5px 6px; vertical-align: top; }
+  table.items th { background: #f3f4f6; font-size: 10px; }
+  .cell.c { text-align: center; } .cell.r { text-align: right; }
+  .bottom { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-top: 8px; }
+  .notes { font-size: 10px; line-height: 1.45; }
+  .totals { text-align: right; font-size: 12px; }
+  .tot-row { display: flex; justify-content: flex-end; gap: 24px; margin: 3px 0; }
+  .tot-row.grand { font-size: 14px; font-weight: 800; margin-top: 6px; padding-top: 6px; border-top: 1px solid #111; }
+  .sig { margin-top: 28px; text-align: right; }
+  .sig img { max-height: 48px; max-width: 140px; display: block; margin: 0 0 4px auto; }
+  .sig-line { border-top: 1px solid #111; display: inline-block; min-width: 160px; padding-top: 4px; font-size: 10px; text-align: center; }
+  .fp { margin-top: 18px; font-size: 8px; color: #666; border-top: 1px dashed #999; padding-top: 6px; text-align: center; }
+</style></head><body>
+  <div class="top">
+    <div>
+      <div class="co-name">${(profile?.businessName || 'Company').replace(/</g,'&lt;')}</div>
+      <div class="co-meta">
+        ${[profile?.address, profile?.city, profile?.state, profile?.pin].filter(Boolean).join(', ')}<br/>
+        ${profile?.gstin ? 'GSTIN: ' + profile.gstin + '<br/>' : ''}
+        ${profile?.phone || profile?.mobile ? 'Mobile: ' + (profile.phone || profile.mobile) : ''}
+      </div>
     </div>
-    </body></html>`;
-  const w = window.open('', '_blank', 'width=900,height=700');
-  if (!w) return toast('Allow pop-ups to print PO', 'error');
-  w.document.write(html);
-  w.document.close();
-  setTimeout(() => { w.focus(); w.print(); }, 400);
+    <div>
+      <div class="po-title">PURCHASE ORDER</div>
+      <div class="po-meta">
+        <b>PO No:</b> ${(po.poNumber || '').replace(/</g,'&lt;')}<br/>
+        <b>Date:</b> ${po.date || ''}<br/>
+        <b>Status:</b> ${po.status || 'Issued'}
+      </div>
+    </div>
+  </div>
+  <div class="two">
+    <div>
+      <div class="sec-h">Supplier Details (To)</div>
+      <b>${(po.vendorName || '').replace(/</g,'&lt;')}</b><br/>
+      ${po.vendorGstin ? 'GSTIN: ' + po.vendorGstin + '<br/>' : ''}
+      ${po.vendorPhone ? 'Phone: ' + po.vendorPhone + '<br/>' : ''}
+      ${po.vendorAddress ? ('Address: ' + String(po.vendorAddress).replace(/</g,'&lt;')) : ''}
+    </div>
+    <div>
+      <div class="sec-h">Delivery Details (Ship To)</div>
+      ${shipName ? '<b>' + String(shipName).replace(/</g,'&lt;') + '</b><br/>' : ''}
+      ${shipAddr ? String(shipAddr).replace(/</g,'&lt;') + '<br/>' : ''}
+      ${shipState ? 'State: ' + String(shipState).replace(/</g,'&lt;') : ''}
+    </div>
+  </div>
+  ${po.subject || po.title ? `<div class="subj"><b>Subject:</b> ${String(po.subject || po.title).replace(/</g,'&lt;')}</div>` : ''}
+  <table class="items">
+    <thead><tr>
+      <th style="width:28px">Sl</th><th>Description / Material</th><th>HSN/SAC</th><th>Unit</th><th>Qty</th><th>Unit Rate</th><th>Amount (₹)</th>
+    </tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" class="cell c">No items</td></tr>'}</tbody>
+  </table>
+  <div class="bottom">
+    <div class="notes">
+      ${notes ? '<b>Notes / Instructions:</b><br/>' + notes + '<br/><br/>' : ''}
+      <b>Terms &amp; Conditions:</b><br/>${terms}
+    </div>
+    <div class="totals">
+      <div class="tot-row"><span>Subtotal:</span><span>₹${t.sub.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      ${taxRows}
+      <div class="tot-row grand"><span>Grand Total:</span><span>₹${t.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      <div class="sig">
+        ${sigSrc ? '<img src="' + sigSrc + '" alt="Signature"/>' : ''}
+        <div class="sig-line">Authorized Signature<br/><span style="font-size:8px;color:#555">${(profile?.businessName || '').replace(/</g,'&lt;')}</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="fp">Generated by SD Dynamics${fingerprint ? ' · SHA-256: ' + fingerprint : ''}</div>
+  <script>window.onload=function(){window.print();}</script>
+</body></html>`;
+  const w = window.open('', '_blank', 'noopener,noreferrer');
+  if (w) { w.document.write(html); w.document.close(); }
 }
+
+
 
 export default function PurchaseOrdersView() {
   const [list, setList] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [shipSites, setShipSites] = useState(['Main Site']);
 
   // Master HSN/SAC + units (same keys as InvoiceGenerator)
   const [hsnMaster, setHsnMaster] = useState([]);
   const [unitMaster, setUnitMaster] = useState(['Nos', 'Hrs', 'Days', 'Kg', 'Ltr', 'Mtr', 'Sqft', 'Job']);
   useEffect(() => {
     try {
-      const custom = JSON.parse(localStorage.getItem('freegstbill_custom_sac') || '[]');
+      const custom = getHsnMaster();
       setHsnMaster(Array.isArray(custom) ? custom.filter(Boolean) : []);
     } catch { /* */ }
     try {
@@ -171,7 +230,16 @@ export default function PurchaseOrdersView() {
   };
 
   useEffect(() => {
-    getAllCostCenters().then(setCostCenters).catch(() => {});
+    getAllCostCenters().then(setCostCenters);
+      getAllClients().then(cs => {
+        setClients(cs || []);
+        const sites = new Set(['Main Site']);
+        (cs || []).forEach(c => {
+          if (c.site) sites.add(c.site);
+          (c.sites || []).forEach(s => sites.add(s));
+        });
+        setShipSites([...sites]);
+      }).catch(() => {}).catch(() => {});
   }, []);
   useEffect(() => { load(); }, []);
 
@@ -290,12 +358,26 @@ export default function PurchaseOrdersView() {
           </div>
           <div className="form-group">
             <label className="form-label">Ship To (Site)</label>
-            <input className="form-input" list="po-sites" value={form.site || ''}
-              onChange={e => setForm({ ...form, site: e.target.value })}
-              placeholder="Delivery site" />
+            <select className="form-input" value={form.site || 'Main Site'}
+              onChange={e => setForm({ ...form, site: e.target.value })}>
+              {(typeof shipSites !== 'undefined' ? shipSites : ['Main Site']).map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
             <datalist id="po-sites">
               {(form.site ? [form.site] : []).map(s => <option key={s} value={s} />)}
             </datalist>
+          </div>
+          <div className="form-group">
+            <label className="form-label">PO Status</label>
+            <select className="form-input" value={form.status || 'issued'}
+              onChange={e => setForm({ ...form, status: e.target.value })}>
+              <option value="draft">Draft</option>
+              <option value="issued">Issued</option>
+              <option value="partially-received">Partially Received</option>
+              <option value="fully-received">Fully Received</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
           </div>
           <div className="form-group">
             <label className="form-label">Cost Center *</label>
@@ -311,17 +393,6 @@ export default function PurchaseOrdersView() {
             <label className="form-label">GST %</label>
             <input type="number" className="form-input" value={form.taxRate}
               onChange={e => setForm({ ...form, taxRate: e.target.value })} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Status</label>
-            <select className="form-input" value={form.status}
-              onChange={e => setForm({ ...form, status: e.target.value })}>
-              <option value="draft">Draft</option>
-              <option value="issued">Issued</option>
-              <option value="partial">Partial</option>
-              <option value="closed">Closed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
           </div>
         </div>
 

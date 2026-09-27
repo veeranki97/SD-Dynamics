@@ -1,10 +1,10 @@
 @echo off
-title Free GST Billing Software Server
+title SD Dynamics Server
 cd /d "%~dp0"
 
 where node >nul 2>nul
 if %errorlevel% neq 0 (
-    echo Node.js not found. Run "Install Free GST Billing Software.bat" first.
+    echo Node.js not found. Run "Install SD Dynamics.bat" first.
     pause
     exit /b 1
 )
@@ -20,7 +20,7 @@ if not exist "dist\index.html" (
 )
 
 echo.
-echo  Starting Free GST Billing Software...
+echo  Starting SD Dynamics...
 echo  (Server will pick an available port automatically)
 echo.
 
@@ -30,7 +30,7 @@ start "" /b cmd /c "node server.js"
 :: Wait for port.txt to be written
 set RETRIES=0
 :waitloop
-if %RETRIES% geq 15 goto opendefault
+if %RETRIES% geq 60 goto opendefault
 timeout /t 1 /nobreak >nul
 set /a RETRIES+=1
 if not exist "data\port.txt" goto waitloop
@@ -38,7 +38,7 @@ if not exist "data\port.txt" goto waitloop
 :: Read the port
 set /p ACTIVE_PORT=<data\port.txt
 
-echo  Free GST Billing Software running at http://localhost:%ACTIVE_PORT%
+echo  SD Dynamics running at http://localhost:%ACTIVE_PORT%
 echo  Press Ctrl+C to stop
 echo.
 
@@ -46,8 +46,11 @@ start http://localhost:%ACTIVE_PORT%
 goto waitforexit
 
 :opendefault
-echo  Free GST Billing Software running at http://localhost:3001
-start http://localhost:3001
+echo  ERROR: data\port.txt not created. Server may have failed to start.
+echo  Try:  node server.js
+echo  from this folder, then open the URL it prints.
+pause
+goto waitforexit
 
 :waitforexit
 :: Keep window open so server keeps running

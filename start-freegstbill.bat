@@ -30,7 +30,7 @@ start "" /b cmd /c "node server.js"
 :: Wait for port.txt to be written
 set RETRIES=0
 :waitloop
-if %RETRIES% geq 15 goto opendefault
+if %RETRIES% geq 60 goto opendefault
 timeout /t 1 /nobreak >nul
 set /a RETRIES+=1
 if not exist "data\port.txt" goto waitloop
@@ -46,8 +46,11 @@ start http://localhost:%ACTIVE_PORT%
 goto waitforexit
 
 :opendefault
-echo  SD Dynamics running at http://localhost:%ACTIVE_PORT%
-start http://localhost:%ACTIVE_PORT%
+echo  ERROR: data\port.txt not created. Server may have failed to start.
+echo  Try:  node server.js
+echo  from this folder, then open the URL it prints.
+pause
+goto waitforexit
 
 :waitforexit
 :: Keep window open so server keeps running
