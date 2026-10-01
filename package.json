@@ -99,7 +99,7 @@
   "dependencies": {
     "chart.js": "^4.5.1",
     "cors": "^2.8.6",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.16",
     "express": "^5.2.1",
     "html2canvas": "^1.4.1",
     "install": "^0.13.0",
